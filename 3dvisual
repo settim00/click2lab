@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editor 3D Avanzato</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/STLLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; margin: 0; background-color: #1f2937; color: #f3f4f6; }
+        #canvasContainer { width: 100%; height: calc(100vh - 200px); /* Altezza canvas meno toolbar, aumentata per più bottoni */ cursor: crosshair; border-radius: 0.5rem; overflow: hidden; }
+        .toolbar {
+            width: 100%; /* Full width on small screens */
+            max-height: 100vh; /* Allow scrolling on small screens */
+        }
+        @media (min-width: 768px) { /* md breakpoint */
+            .toolbar {
+                width: 288px; /* md:w-72 */
+                height: 100vh;
+            }
+            #canvasContainer {
+                 height: 100vh;
+            }
+        }
+        .toolbar-item { margin-bottom: 0.5rem; }
+        .toolbar-item label { display: block; margin-bottom: 0.25rem; font-size: 0.875rem; }
+        .toolbar-item input[type="range"], .toolbar-item input[type="color"], .toolbar-item select, .toolbar-item input[type="file"], .toolbar-item button {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            background-color: #374151;
+            border: 1px solid #4b5563;
+            color: #f3f4f6;
+            box-sizing: border-box; /* Ensure padding doesn't expand width */
+        }
+        .toolbar-item input[type="file"]::file-selector-button {
+            background-color: #4f46e5;
+            color: white;
+            padding: 0.5rem 0.75rem;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            margin-right: 0.5rem;
+        }
+        .toolbar-item input[type="file"]::file-selector-button:hover {
+            background-color: #4338ca;
+        }
+        .toolbar-item button {
+            background-color: #4f46e5; /* Default button color */
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        .toolbar-item button:hover {
+            background-color: #4338ca;
+        }
+        .toolbar-item button.btn-red { background-color: #dc2626; } /* red-600 */
+        .toolbar-item button.btn-red:hover { background-color: #b91c1c; } /* red-700 */
+        .toolbar-item button.btn-yellow { background-color: #f59e0b; color: #1f2937; } /* yellow-500 */
+        .toolbar-item button.btn-yellow:hover { background-color: #d97706; } /* yellow-600 */
+        .toolbar-item button.btn-green { background-color: #10b981; } /* green-500 */
+        .toolbar-item button.btn-green:hover { background-color: #059669; } /* green-600 */
+
+
+        .message-box {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #4f46e5;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        .message-box.show {
+            opacity: 1;
+        }
+        #brushCursor {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            mix-blend-mode: difference;
+            display: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body class="flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <div id="toolbar" class="toolbar bg-gray-800 p-4 space-y-3 overflow-y-auto">
+        <h2 class="text-xl font-semibold text-white mb-3">Strumenti</h2>
+        
+        <div class="toolbar-item">
+            <label for="fileInput">Carica Modello (STL/OBJ)</label>
+            <input type="file" id="fileInput" accept=".stl,.obj">
+        </div>
+
+        <div class="toolbar-item">
+            <label for="toolSelect">Pennello:</label>
+            <select id="toolSelect">
+                <option value="none">Nessuno</option>
+                <option value="color">Colora</option>
+                <option value="inflate">Gonfia</option>
+                <option value="deflate">Riduci</option>
+            </select>
+        </div>
+
+        <div class="toolbar-item">
+            <label for="brushSize">Dimensione Pennello:</label>
+            <input type="range" id="brushSize" min="0.01" max="2" step="0.01" value="0.1">
+        </div>
+
+        <div class="toolbar-item">
+            <label for="brushStrength">Intensità Pennello:</label>
+            <input type="range" id="brushStrength" min="0.01" max="0.5" step="0.01" value="0.05">
+        </div>
+        
+        <div class="toolbar-item">
+            <label for="brushColor">Colore Pennello:</label>
+            <input type="color" id="brushColor" value="#ff0000">
+        </div>
+        
+        <div class="toolbar-item">
+            <button id="resetViewButton">Reimposta Vista</button>
+        </div>
+        <div class="toolbar-item">
+            <button id="resetColorsButton" class="btn-red">Reimposta Colori</button>
+        </div>
+        <div class="toolbar-item">
+            <button id="resetGeometryButton" class="btn-yellow">Reimposta Geometria</button>
+        </div>
+        
+        <hr class="border-gray-600 my-3">
+
+        <div class="toolbar-item">
+            <button id="exportSTLButton" class="btn-green">Esporta STL</button>
+        </div>
+        <div class="toolbar-item">
+            <button id="exportOBJButton" class="btn-green">Esporta OBJ</button>
+        </div>
+
+        <p class="text-xs text-gray-400 mt-3">
+            <strong>Nota:</strong> Il supporto per file DCM è complesso e non implementato.
+            Le modifiche alla geometria (Gonfia/Riduci) sono sperimentali e **modificano solo le posizioni dei vertici esistenti, non la topologia (numero di triangoli)**. Deformazioni estese possono causare artefatti.
+            L'esportazione OBJ non include i colori dei vertici.
+        </p>
+    </div>
+
+    <div id="canvasContainer" class="flex-grow relative"> <div id="brushCursor"></div> </div>
+    
+    <div id="messageBox" class="message-box"></div>
+
+
+    <script type="module">
+        let scene, camera, renderer, controls, model, originalModelData;
+        let raycaster, mouse;
+        let isMouseDown = false;
+        let currentTool = 'none';
+        let brushSize = 0.1;
+        let brushStrength = 0.05;
+        let brushColor = new THREE.Color(0xff0000);
+
+        const canvasContainer = document.getElementById('canvasContainer');
+        const fileInput = document.getElementById('fileInput');
+        const toolSelect = document.getElementById('toolSelect');
+        const brushSizeSlider = document.getElementById('brushSize');
+        const brushStrengthSlider = document.getElementById('brushStrength');
+        const brushColorPicker = document.getElementById('brushColor');
+        const resetViewButton = document.getElementById('resetViewButton');
+        const resetColorsButton = document.getElementById('resetColorsButton');
+        const resetGeometryButton = document.getElementById('resetGeometryButton');
+        const exportSTLButton = document.getElementById('exportSTLButton');
+        const exportOBJButton = document.getElementById('exportOBJButton');
+        const brushCursor = document.getElementById('brushCursor');
+
+        function showMessage(message, duration = 3000) {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.textContent = message;
+            messageBox.classList.add('show');
+            setTimeout(() => {
+                messageBox.classList.remove('show');
+            }, duration);
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x374151);
+
+            const containerRect = canvasContainer.getBoundingClientRect();
+            camera = new THREE.PerspectiveCamera(75, containerRect.width / containerRect.height, 0.1, 1000);
+            camera.position.set(0, 1, 5);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); // preserveDrawingBuffer per screenshot, se necessario
+            renderer.setSize(containerRect.width, containerRect.height);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            canvasContainer.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Aumentata leggermente
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9); // Aumentata leggermente
+            directionalLight.position.set(5, 10, 7.5);
+            directionalLight.castShadow = true; // Opzionale per ombre più definite
+            scene.add(directionalLight);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05; // Leggermente più reattivo
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // Event Listeners UI
+            fileInput.addEventListener('change', loadFile);
+            toolSelect.addEventListener('change', (e) => {
+                currentTool = e.target.value;
+                if (currentTool === 'none' || !model) {
+                    brushCursor.style.display = 'none';
+                } else {
+                    brushCursor.style.display = 'block';
+                }
+            });
+            brushSizeSlider.addEventListener('input', (e) => brushSize = parseFloat(e.target.value));
+            brushStrengthSlider.addEventListener('input', (e) => brushStrength = parseFloat(e.target.value));
+            brushColorPicker.addEventListener('input', (e) => brushColor.set(e.target.value));
+            
+            resetViewButton.addEventListener('click', () => {
+                if (model) {
+                    // Tenta di ricalcolare il bounding box prima di centrare
+                    model.traverse(child => { 
+                        if (child.isMesh) child.geometry.computeBoundingBox(); 
+                    });
+                    centerAndFitModel(model);
+                } else {
+                     camera.position.set(0, 1, 5);
+                     controls.target.set(0,0,0);
+                }
+                controls.update();
+            });
+
+            resetColorsButton.addEventListener('click', resetModelColors);
+            resetGeometryButton.addEventListener('click', resetModelGeometry);
+            exportSTLButton.addEventListener('click', exportSTL);
+            exportOBJButton.addEventListener('click', exportOBJ);
+
+            canvasContainer.addEventListener('mousedown', onMouseDown);
+            canvasContainer.addEventListener('mouseup', onMouseUp);
+            canvasContainer.addEventListener('mousemove', onMouseMove);
+            canvasContainer.addEventListener('mouseleave', () => {
+                 isMouseDown = false;
+                 brushCursor.style.display = 'none';
+            });
+             canvasContainer.addEventListener('mouseenter', () => {
+                if (currentTool !== 'none' && model) {
+                    brushCursor.style.display = 'block';
+                }
+            });
+
+            window.addEventListener('resize', onWindowResize);
+            
+            animate();
+            showMessage("Benvenuto! Carica un modello STL o OBJ per iniziare.", 5000);
+        }
+
+        function onWindowResize() {
+            const containerRect = canvasContainer.getBoundingClientRect();
+            camera.aspect = containerRect.width / containerRect.height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(containerRect.width, containerRect.height);
+        }
+
+        function loadFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            const filename = file.name.toLowerCase();
+
+            reader.onload = (e) => {
+                if (model) {
+                    scene.remove(model);
+                    if (model.geometry) model.geometry.dispose();
+                    if (model.material) {
+                         if (Array.isArray(model.material)) {
+                            model.material.forEach(m => m.dispose());
+                        } else {
+                            model.material.dispose();
+                        }
+                    }
+                }
+
+                let loader;
+                try {
+                    if (filename.endsWith('.stl')) {
+                        loader = new THREE.STLLoader();
+                        const geometry = loader.parse(e.target.result);
+                        if (!geometry.attributes.position || geometry.attributes.position.count === 0) {
+                            throw new Error("STL file is empty or invalid.");
+                        }
+                        geometry.computeVertexNormals();
+                        geometry.computeBoundingBox();
+                        
+                        const colors = [];
+                        const defaultColor = new THREE.Color(0.7, 0.7, 0.7);
+                        for (let i = 0; i < geometry.attributes.position.count; i++) {
+                            colors.push(defaultColor.r, defaultColor.g, defaultColor.b);
+                        }
+                        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                        
+                        const material = new THREE.MeshStandardMaterial({ 
+                            vertexColors: true, 
+                            metalness: 0.2, 
+                            roughness: 0.7
+                        });
+                        model = new THREE.Mesh(geometry, material);
+
+                    } else if (filename.endsWith('.obj')) {
+                        loader = new THREE.OBJLoader();
+                        const object = loader.parse(e.target.result);
+                        if (!object.children.length) {
+                             throw new Error("OBJ file is empty, does not contain meshes, or could not be parsed.");
+                        }
+                        model = object;
+                        model.traverse((child) => {
+                            if (child instanceof THREE.Mesh) {
+                                child.geometry.computeVertexNormals(); // Essenziale
+                                child.geometry.computeBoundingBox();
+
+                                if (!child.geometry.attributes.color) {
+                                    const colors = [];
+                                    const defaultColor = new THREE.Color(0.7, 0.7, 0.7);
+                                    for (let i = 0; i < child.geometry.attributes.position.count; i++) {
+                                        colors.push(defaultColor.r, defaultColor.g, defaultColor.b);
+                                    }
+                                    child.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                                }
+                                
+                                if (Array.isArray(child.material)) {
+                                    child.material.forEach(m => {
+                                        m.vertexColors = true;
+                                        m.needsUpdate = true;
+                                    });
+                                } else {
+                                    // Se il materiale esiste, prova ad aggiornarlo. Altrimenti, creane uno nuovo.
+                                    if (child.material) {
+                                        child.material.vertexColors = true;
+                                        child.material.needsUpdate = true;
+                                    } else {
+                                        child.material = new THREE.MeshStandardMaterial({
+                                            vertexColors: true,
+                                            metalness: 0.2,
+                                            roughness: 0.7
+                                        });
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        showMessage("Formato file non supportato. Usa STL o OBJ.", 4000);
+                        return;
+                    }
+                } catch (error) {
+                    showMessage(`Errore caricamento modello: ${error.message}`, 5000);
+                    console.error("Load file error:", error);
+                    if (model) scene.remove(model); // Rimuovi modello parzialmente caricato o corrotto
+                    model = null;
+                    return;
+                }
+                
+                storeOriginalModelData();
+                scene.add(model);
+                centerAndFitModel(model);
+                showMessage(`Modello ${file.name} caricato.`, 3000);
+                if (currentTool !== 'none') brushCursor.style.display = 'block';
+            };
+
+            if (filename.endsWith('.stl')) {
+                reader.readAsArrayBuffer(file);
+            } else if (filename.endsWith('.obj')) {
+                reader.readAsText(file);
+            }
+        }
+        
+        function storeOriginalModelData() {
+            if (!model) return;
+            originalModelData = { parts: [] }; // Cambiato per gestire multi-mesh in modo più pulito
+
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    const posAttr = child.geometry.attributes.position;
+                    const colAttr = child.geometry.attributes.color;
+                    
+                    const partData = {
+                        meshUuid: child.uuid,
+                        originalPositions: new Float32Array(posAttr.array)
+                    };
+                    if (colAttr) {
+                         partData.originalColors = new Float32Array(colAttr.array);
+                    }
+                    originalModelData.parts.push(partData);
+                }
+            });
+        }
+
+        function resetModelColors() {
+            if (!model || !originalModelData || !originalModelData.parts) {
+                showMessage("Nessun dato colore originale da ripristinare.", 3000);
+                return;
+            }
+
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    const partData = originalModelData.parts.find(p => p.meshUuid === child.uuid);
+                    if (partData && partData.originalColors) {
+                        const colorAttribute = child.geometry.attributes.color;
+                        if (colorAttribute) {
+                            colorAttribute.array.set(partData.originalColors);
+                            colorAttribute.needsUpdate = true;
+                        }
+                    } else if (child.geometry.attributes.color) { // Se non c'erano colori originali ma sono stati aggiunti
+                        const defaultColor = new THREE.Color(0.7, 0.7, 0.7);
+                        const colorsArray = child.geometry.attributes.color.array;
+                        for (let i = 0; i < colorsArray.length; i += 3) {
+                            colorsArray[i] = defaultColor.r;
+                            colorsArray[i+1] = defaultColor.g;
+                            colorsArray[i+2] = defaultColor.b;
+                        }
+                        child.geometry.attributes.color.needsUpdate = true;
+                    }
+                }
+            });
+            showMessage("Colori del modello ripristinati.", 3000);
+        }
+
+        function resetModelGeometry() {
+            if (!model || !originalModelData || !originalModelData.parts) {
+                 showMessage("Nessun dato geometria originale da ripristinare.", 3000);
+                return;
+            }
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                     const partData = originalModelData.parts.find(p => p.meshUuid === child.uuid);
+                    if (partData && partData.originalPositions) {
+                        const positionAttribute = child.geometry.attributes.position;
+                        positionAttribute.array.set(partData.originalPositions);
+                        positionAttribute.needsUpdate = true;
+                        child.geometry.computeVertexNormals(); 
+                        child.geometry.computeBoundingBox(); // Ricalcola anche il bounding box
+                    }
+                }
+            });
+             showMessage("Geometria del modello ripristinata.", 3000);
+        }
+
+
+        function centerAndFitModel(object) {
+            const boundingBox = new THREE.Box3();
+            // Calcola il bounding box complessivo se 'object' è un gruppo
+            if (object.isGroup) {
+                 object.traverse(child => {
+                    if (child.isMesh) {
+                        child.geometry.computeBoundingBox(); // Assicurati che sia aggiornato
+                        boundingBox.union(child.geometry.boundingBox.clone().applyMatrix4(child.matrixWorld));
+                    }
+                 });
+            } else if (object.isMesh) {
+                 object.geometry.computeBoundingBox();
+                 boundingBox.copy(object.geometry.boundingBox).applyMatrix4(object.matrixWorld);
+            } else { // Fallback se non è né gruppo né mesh, o non ha geometria
+                 boundingBox.setFromObject(object); // Metodo meno preciso ma più generale
+            }
+
+
+            if (boundingBox.isEmpty()) {
+                // console.warn("BoundingBox is empty, cannot center model properly.");
+                camera.position.set(0,1,5);
+                controls.target.set(0,0,0);
+                controls.update();
+                return;
+            }
+
+            const center = boundingBox.getCenter(new THREE.Vector3());
+            const size = boundingBox.getSize(new THREE.Vector3());
+            
+            // Sposta l'oggetto principale (gruppo o mesh singolo) in modo che il suo centro calcolato sia all'origine
+            // Questo è più complesso se il modello ha già una sua gerarchia.
+            // Per semplicità, se è un gruppo, non modifichiamo la sua posizione, ma aggiustiamo la camera.
+            // Se è una singola mesh, possiamo centrarla.
+            if (object.isMesh && !object.parent?.isGroup) { // Centra solo se è una mesh radice
+                object.position.x += (object.position.x - center.x);
+                object.position.y += (object.position.y - center.y);
+                object.position.z += (object.position.z - center.z);
+            }
+
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            if (maxDim === 0) { // Evita divisione per zero se il modello è un punto
+                 // console.warn("Model has no size, using default camera settings.");
+                 camera.position.set(0,1,5);
+                 controls.target.copy(center); // Punta comunque al centro (potrebbe essere 0,0,0)
+                 controls.update();
+                 return;
+            }
+
+            const fitOffset = 1.2; // Ridotto per uno zoom leggermente maggiore
+            const distance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
+            
+            camera.position.copy(center);
+            camera.position.z += distance * fitOffset; 
+            camera.position.y += size.y * 0.2; // Leggermente più in alto rispetto al centro Y del bounding box
+            camera.lookAt(center); // Assicura che la camera guardi il centro
+            
+            controls.target.copy(center);
+            controls.update();
+        }
+
+        function onMouseDown(event) {
+            if (event.target !== renderer.domElement && !renderer.domElement.contains(event.target)) return;
+            isMouseDown = true;
+            if (currentTool !== 'none' && model) {
+                applyBrush(event);
+            }
+        }
+
+        function onMouseUp() {
+            isMouseDown = false;
+        }
+        
+        function updateBrushCursor(event) {
+            if (!model || currentTool === 'none' || !canvasContainer.contains(event.target)) {
+                brushCursor.style.display = 'none';
+                return;
+            }
+            brushCursor.style.display = 'block';
+            
+            const rect = canvasContainer.getBoundingClientRect(); // Usa canvasContainer per le coordinate del mouse
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            // Calcolo approssimativo della dimensione del cursore in pixel
+            let pixelSize = 20; // Default
+            if (camera && model) {
+                // Proietta un punto vicino al centro del modello e un punto spostato di brushSize
+                // per stimare la dimensione in pixel. Questo è più accurato.
+                const modelCenter = new THREE.Vector3();
+                model.getWorldPosition(modelCenter); // Centro del modello nel mondo
+
+                const p1 = modelCenter.clone().project(camera);
+                const p2 = modelCenter.clone().add(new THREE.Vector3(brushSize, 0, 0)).project(camera); // Aggiungi brushSize su un asse
+
+                // Converti da NDC a pixel
+                const dx = (p2.x - p1.x) * (rect.width / 2);
+                const dy = (p2.y - p1.y) * (rect.height / 2); // Non usato direttamente ma per completezza
+                
+                pixelSize = Math.abs(dx) > 0 ? Math.abs(dx) : Math.abs(dy); // Usa la dimensione proiettata
+                pixelSize = Math.min(Math.max(pixelSize, 10), 150); // Limita dimensione
+            }
+
+
+            brushCursor.style.left = `${x}px`;
+            brushCursor.style.top = `${y}px`;
+            brushCursor.style.width = `${pixelSize}px`;
+            brushCursor.style.height = `${pixelSize}px`;
+        }
+
+
+        function onMouseMove(event) {
+            event.preventDefault();
+            updateBrushCursor(event);
+
+            if (!isMouseDown || currentTool === 'none' || !model) {
+                return;
+            }
+            applyBrush(event);
+        }
+
+        function applyBrush(event) {
+            if (!model) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            const meshesToIntersect = [];
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    meshesToIntersect.push(child);
+                }
+            });
+
+            const intersects = raycaster.intersectObjects(meshesToIntersect, false); // false: non ricorsivo, gestiamo noi la gerarchia
+
+            if (intersects.length > 0) {
+                const intersection = intersects[0];
+                const point = intersection.point;
+                const object = intersection.object; // Mesh specifico
+
+                if (object && object.geometry) {
+                    const geometry = object.geometry;
+                    const positions = geometry.attributes.position;
+                    const normals = geometry.attributes.normal;
+                    const colors = geometry.attributes.color;
+
+                    const localPoint = object.worldToLocal(point.clone()); // Punto di intersezione nello spazio locale dell'oggetto
+                    const brushRadiusSq = brushSize * brushSize; // brushSize è già in unità del mondo, ma qui lo confrontiamo con vertici locali
+                                                                // Questo funziona bene se l'oggetto non è scalato in modo non uniforme.
+                                                                // Per una precisione maggiore con scale non uniformi, bisognerebbe trasformare il raggio.
+
+                    let changed = false;
+
+                    for (let i = 0; i < positions.count; i++) {
+                        const vertex = new THREE.Vector3().fromBufferAttribute(positions, i);
+                        const distanceSq = vertex.distanceToSquared(localPoint);
+
+                        if (distanceSq < brushRadiusSq) {
+                            // Calcola un fattore di attenuazione basato sulla distanza dal centro del pennello
+                            const falloff = Math.sqrt(distanceSq) / brushSize; // 0 al centro, 1 al bordo
+                            const localStrength = brushStrength * (1 - falloff); // Più forte al centro
+
+                            if (currentTool === 'color' && colors) {
+                                // Interpolazione verso il nuovo colore per un effetto più morbido
+                                const oldColor = new THREE.Color().fromBufferAttribute(colors, i);
+                                oldColor.lerp(brushColor, localStrength * 0.5); // *0.5 per un'applicazione più graduale
+                                colors.setXYZ(i, oldColor.r, oldColor.g, oldColor.b);
+                                changed = true;
+                            } else if ((currentTool === 'inflate' || currentTool === 'deflate') && normals) {
+                                const normal = new THREE.Vector3().fromBufferAttribute(normals, i);
+                                const direction = (currentTool === 'inflate' ? 1 : -1);
+                                vertex.addScaledVector(normal, direction * localStrength);
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    if (changed) {
+                        if (colors) colors.needsUpdate = true;
+                        positions.needsUpdate = true;
+                        if (currentTool === 'inflate' || currentTool === 'deflate') {
+                             geometry.computeVertexNormals(); // Fondamentale dopo la deformazione
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Funzioni di Esportazione ---
+        function downloadFile(filename, data, mimeType) {
+            const blob = new Blob([data], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportSTL() {
+            if (!model) { showMessage("Nessun modello da esportare.", 3000); return; }
+            
+            let stlString = "solid exported_model_by_gemini\n";
+            const tempVector = new THREE.Vector3(); // Per riutilizzo
+            const tempTriangle = new THREE.Triangle(); // Per calcolo normale
+
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    const geometry = child.geometry;
+                    // Applica le trasformazioni del mondo dell'oggetto (posizione, rotazione, scala)
+                    // Cloniamo la geometria per non modificare l'originale in scena
+                    const transformedGeometry = geometry.clone();
+                    transformedGeometry.applyMatrix4(child.matrixWorld);
+
+                    const positions = transformedGeometry.attributes.position;
+
+                    if (transformedGeometry.index) { // Geometria indicizzata
+                        for (let i = 0; i < transformedGeometry.index.count; i += 3) {
+                            const vA = tempVector.clone().fromBufferAttribute(positions, transformedGeometry.index.getX(i));
+                            const vB = tempVector.clone().fromBufferAttribute(positions, transformedGeometry.index.getX(i + 1));
+                            const vC = tempVector.clone().fromBufferAttribute(positions, transformedGeometry.index.getX(i + 2));
+                            
+                            tempTriangle.set(vA, vB, vC);
+                            const normal = tempTriangle.getNormal(new THREE.Vector3());
+
+                            stlString += `facet normal ${normal.x} ${normal.y} ${normal.z}\n`;
+                            stlString += "outer loop\n";
+                            stlString += `vertex ${vA.x} ${vA.y} ${vA.z}\n`;
+                            stlString += `vertex ${vB.x} ${vB.y} ${vB.z}\n`;
+                            stlString += `vertex ${vC.x} ${vC.y} ${vC.z}\n`;
+                            stlString += "endloop\n";
+                            stlString += "endfacet\n";
+                        }
+                    } else { // Geometria non indicizzata (array di triangoli)
+                        for (let i = 0; i < positions.count; i += 3) {
+                            const vA = tempVector.clone().fromBufferAttribute(positions, i);
+                            const vB = tempVector.clone().fromBufferAttribute(positions, i + 1);
+                            const vC = tempVector.clone().fromBufferAttribute(positions, i + 2);
+
+                            tempTriangle.set(vA, vB, vC);
+                            const normal = tempTriangle.getNormal(new THREE.Vector3());
+
+                            stlString += `facet normal ${normal.x} ${normal.y} ${normal.z}\n`;
+                            stlString += "outer loop\n";
+                            stlString += `vertex ${vA.x} ${vA.y} ${vA.z}\n`;
+                            stlString += `vertex ${vB.x} ${vB.y} ${vB.z}\n`;
+                            stlString += `vertex ${vC.x} ${vC.y} ${vC.z}\n`;
+                            stlString += "endloop\n";
+                            stlString += "endfacet\n";
+                        }
+                    }
+                    transformedGeometry.dispose(); // Pulisci la geometria clonata
+                }
+            });
+            stlString += "endsolid exported_model_by_gemini\n";
+            downloadFile("model.stl", stlString, "application/sla");
+            showMessage("Modello esportato come STL.", 3000);
+        }
+
+        function exportOBJ() {
+            if (!model) { showMessage("Nessun modello da esportare.", 3000); return; }
+
+            let objString = "# OBJ exporter by Gemini\n";
+            objString += `# Model name: ${model.name || 'untitled'}\n`;
+            let vertexOffset = 1; // OBJ usa indici basati su 1
+            let normalOffset = 1; // Anche per le normali
+
+            const tempVector = new THREE.Vector3();
+            const normalMatrix = new THREE.Matrix3();
+
+            model.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    objString += `o ${child.name || 'mesh_' + child.uuid.substring(0,6)}\n`; // Nome oggetto
+                    const geometry = child.geometry;
+                    const positions = geometry.attributes.position;
+                    const normals = geometry.attributes.normal;
+
+                    // Vertici
+                    for (let i = 0; i < positions.count; i++) {
+                        tempVector.fromBufferAttribute(positions, i);
+                        tempVector.applyMatrix4(child.matrixWorld); // Trasforma nello spazio mondo
+                        objString += `v ${tempVector.x} ${tempVector.y} ${tempVector.z}\n`;
+                    }
+
+                    // Normali dei vertici (se presenti)
+                    if (normals) {
+                        normalMatrix.getNormalMatrix(child.matrixWorld); // Matrice per trasformare le normali
+                        for (let i = 0; i < normals.count; i++) {
+                            tempVector.fromBufferAttribute(normals, i);
+                            tempVector.applyMatrix3(normalMatrix).normalize(); // Trasforma e normalizza
+                            objString += `vn ${tempVector.x} ${tempVector.y} ${tempVector.z}\n`;
+                        }
+                    }
+                    
+                    // Facce
+                    if (geometry.index) { // Geometria indicizzata
+                        for (let i = 0; i < geometry.index.count; i += 3) {
+                            const iA = geometry.index.getX(i) + vertexOffset;
+                            const iB = geometry.index.getX(i + 1) + vertexOffset;
+                            const iC = geometry.index.getX(i + 2) + vertexOffset;
+                            if (normals) {
+                                // Assumiamo che gli indici delle normali corrispondano a quelli dei vertici
+                                const nA = geometry.index.getX(i) + normalOffset;
+                                const nB = geometry.index.getX(i + 1) + normalOffset;
+                                const nC = geometry.index.getX(i + 2) + normalOffset;
+                                objString += `f ${iA}//${nA} ${iB}//${nB} ${iC}//${nC}\n`;
+                            } else {
+                                objString += `f ${iA} ${iB} ${iC}\n`;
+                            }
+                        }
+                    } else { // Geometria non indicizzata
+                        for (let i = 0; i < positions.count; i += 3) {
+                            const iA = i + vertexOffset;
+                            const iB = i + 1 + vertexOffset;
+                            const iC = i + 2 + vertexOffset;
+                             if (normals) {
+                                const nA = i + normalOffset;
+                                const nB = i + 1 + normalOffset;
+                                const nC = i + 2 + normalOffset;
+                                objString += `f ${iA}//${nA} ${iB}//${nB} ${iC}//${nC}\n`;
+                            } else {
+                                objString += `f ${iA} ${iB} ${iC}\n`;
+                            }
+                        }
+                    }
+                    vertexOffset += positions.count;
+                    if (normals) normalOffset += normals.count;
+                }
+            });
+            downloadFile("model.obj", objString, "text/plain");
+            showMessage("Modello esportato come OBJ.", 3000);
+        }
+
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
